@@ -1,15 +1,13 @@
-module AsinInterpolation(
-    input              clk,
-    input              reset_n,
-    input              start,
-
-    input      [63:0]  target, 
-
-    output reg [5:0]   ASIN_ADDR,
-    input      [127:0] ASIN_DATA,
-
-    output reg         done,
-    output reg signed [127:0] asin_interp
+module InterpolationCore(
+input clk,
+input reset_n,
+input start,
+input mode,
+input [63:0] target,
+output reg [6:0] ADDR,
+input [127:0] DATA,
+output reg done,
+output reg [127:0] interp
 );
 
 localparam  IDLE     = 4'd0,
@@ -24,8 +22,10 @@ localparam  IDLE     = 4'd0,
 
 reg [3:0] bs_curr_state, bs_next_state;
 
-reg [5:0] low, high;
-reg [5:0] low_next, high_next;
+reg [6:0] low, high;
+reg [6:0] low_next, high_next;
+
+wire [6:0] TABLE_MAX = mode ? 7'd63 : 7'd127;
 
 reg signed [64:0] x0, x1;
 reg signed [64:0] y0, y1;
@@ -50,7 +50,6 @@ wire div_by_0;
 wire signed [91:0] div_quotient;
 wire signed [25:0] div_remainder;
 
-// 替換為 Sequencial Divider，面積更小
 wire div_complete;
 reg  div_start;
 
@@ -117,7 +116,6 @@ always @(*) begin
     endcase
 end
 
-// 產生 start 訊號給 DW_div_seq (維持一個 clock 的 high)
 always @(*) begin
     if (bs_curr_state == START_DIV)
         div_start = 1'b1;
@@ -128,21 +126,21 @@ end
 always @(*) begin
     low_next  = low;
     high_next = high;
-    if({1'b0, target} < {1'b0, ASIN_DATA[127:64]}) begin
-        high_next = ASIN_ADDR;
+    if({1'b0, target} < {1'b0, DATA[127:64]}) begin
+        high_next = ADDR;
     end else begin
-        low_next = ASIN_ADDR;
+        low_next = ADDR;
     end
 end
 
 always @(posedge clk or negedge reset_n) begin
     if(!reset_n) begin
         bs_curr_state <= IDLE;
-        low        <= 0;
-        high       <= 63;
-        ASIN_ADDR  <= 31;
+        low  <= 0;
+        high <= TABLE_MAX;
+        ADDR <= TABLE_MAX >> 1;
         done       <= 0;
-        asin_interp  <= 0;
+        interp  <= 0;
     end else begin
         bs_curr_state <= bs_next_state;
         done       <= 0; 
@@ -150,33 +148,32 @@ always @(posedge clk or negedge reset_n) begin
         case(bs_curr_state)
             IDLE: begin
                 if(start) begin
-                    low      <= 0;
-                    high     <= 63;
-                    ASIN_ADDR <= 31;
+                    low  <= 0;
+                    high <= TABLE_MAX;
+                    ADDR <= TABLE_MAX >> 1;
                 end
             end
             SEARCH: begin
                 if ((high - low) == 6'd1) begin
-                    ASIN_ADDR <= low;
+                    ADDR <= low;
                 end else begin
                     low      <= low_next;
                     high     <= high_next;
-                    ASIN_ADDR <= ({1'b0, low_next} + {1'b0, high_next}) >> 1;
+                    ADDR <= ({1'b0, low_next} + {1'b0, high_next}) >> 1;
                 end
             end
             READ_L: begin
-                x0 <= $signed({1'b0, ASIN_DATA[127:64]});
-                y0 <= $signed({1'b0, ASIN_DATA[63:0]});
-                ASIN_ADDR <= high; 
+                x0 <= $signed({1'b0, DATA[127:64]});
+                y0 <= $signed({1'b0, DATA[63:0]});
+                ADDR <= high; 
             end
             READ_H: begin
-                x1 <= $signed({1'b0, ASIN_DATA[127:64]});
-                y1 <= $signed({1'b0, ASIN_DATA[63:0]});
+                x1 <= $signed({1'b0, DATA[127:64]});
+                y1 <= $signed({1'b0, DATA[63:0]});
             end
             WAIT_DIV: begin
-                // 改為偵測 complete 訊號
                 if (div_complete) begin
-                    asin_interp <= {36'b0, div_quotient[91:0]}; 
+                    interp <= {36'b0, div_quotient[91:0]}; 
                     done       <= 1'b1;
                 end
             end 
